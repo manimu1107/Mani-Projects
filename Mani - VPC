@@ -1,0 +1,175 @@
+terraform {
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+      version = "5.31.0"
+    }
+  }
+}
+
+provider "aws" {
+  # Configuration options
+}
+
+# Create a VPC
+resource "aws_vpc" "example" {
+  cidr_block = "10.0.0.0/16"
+}
+
+resource "aws_vpc" "tvpc" {
+  cidr_block       = "10.0.0.0/16"
+  instance_tenancy = "default"
+
+  tags = {
+    Name = "tvpc"
+  }
+}
+
+resource "aws_subnet" "pub-sub" {
+  vpc_id     = aws_vpc.tvpc.id
+  cidr_block = "10.0.1.0/24"
+  availability_zone = "us-east-1a"
+
+  tags = {
+    Name = "pub-sub"
+  }
+}
+
+resource "aws_subnet" "pvt-sub" {
+  vpc_id     = aws_vpc.tvpc.id
+  cidr_block = "10.0.2.0/24"
+  availability_zone = "us-east-1b"
+
+  tags = {
+    Name = "pvt-sub"
+  }
+}
+
+resource "aws_internet_gateway" "tfigw" {
+  vpc_id = aws_vpc.tvpc.id
+
+  tags = {
+    Name = "main"
+  }
+}
+
+resource "aws_route_table" "pub-rt" {
+  vpc_id = aws_vpc.tvpc.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.tfigw.id
+  }
+
+  tags = {
+    Name = "pub-rt"
+  }
+}
+
+resource "aws_route_table_association" "pubrta" {
+  subnet_id      = aws_subnet.pub-sub.id
+  route_table_id = aws_route_table.pub-rt.id
+}
+
+resource "aws_eip" "teip" {
+  domain   = "vpc"
+}
+
+resource "aws_nat_gateway" "tnat" {
+  allocation_id = aws_eip.teip.id
+  subnet_id     = aws_subnet.pub-sub.id
+
+  tags = {
+    Name = "tnat"
+  }
+
+}
+
+resource "aws_route_table" "pvt-rt" {
+  vpc_id = aws_vpc.tvpc.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_nat_gateway.tnat.id
+  }
+
+  tags = {
+    Name = "pub-rt"
+  }
+}
+
+resource "aws_route_table_association" "pvtrta" {
+  subnet_id      = aws_subnet.pvt-sub.id
+  route_table_id = aws_route_table.pvt-rt.id
+}
+
+resource "aws_security_group" "pub-sg" {
+  name        = "pub-sg"
+  description = "security group for pub subnet"
+  vpc_id      = aws_vpc.tvpc.id
+
+  ingress {
+    description      = "TLS from VPC"
+    from_port        = 22
+    to_port          = 22
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description      = "TLS from VPC"
+    from_port        = 80
+    to_port          = 80
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+  }
+
+ 
+
+  tags = {
+    Name = "pub-sg"
+  }
+}
+
+resource "aws_security_group" "pvt-sg" {
+  name        = "pvt-sg"
+  description = "pvt-sg"
+  vpc_id      = aws_vpc.tvpc.id
+
+  ingress {
+    description      = "TLS from VPC"
+    from_port        = 20
+    to_port          = 20
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+    security_groups = [aws_security_group.pub-sg.id]
+  }
+
+  ingress {
+    from_port        = 80
+    to_port          = 80
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+    security_groups = [aws_security_group.pub-sg.id]
+  }
+  tags = {
+    Name = "pvt-sg"
+  }
+}
+
+resource "aws_instance" "Instance1" {
+  ami                         = "ami-00b8917ae86a424c9"
+  instance_type               = "t2.micro"
+  subnet_id                   = aws_subnet.pub-sub.id
+  vpc_security_group_ids      = [aws_security_group.pub-sg.id]
+  key_name                    = "idkbro"
+  associate_public_ip_address = true
+}
+
+resource "aws_instance" "Instance2" {
+  ami                         = "ami-00b8917ae86a424c9"
+  instance_type               = "t2.micro"
+  subnet_id                   = aws_subnet.pvt-sub.id
+  vpc_security_group_ids      = [aws_security_group.pvt-sg.id]
+  key_name                    = "idkbro"
+}
